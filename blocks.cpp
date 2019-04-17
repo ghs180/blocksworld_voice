@@ -1,0 +1,810 @@
+/****************************************************************
+Blocks world simulator
+****************************************************************/
+
+#include <math.h>
+#include <string.h>
+#include <ode/ode.h>
+#include <drawstuff/drawstuff.h>
+#include "my-ode.h"
+#include "blocks.h"
+
+/****************************************************************/
+// Globals
+
+// ODE dynamics, collision, joints, and other objects
+static dsFunctions fn;
+static dWorldID world;
+static dSpaceID space;
+static dJointGroupID contact_joint_group;
+static dThreadingImplementationID threading;
+static dThreadingThreadPoolID pool;
+static bool doFast = true;
+
+// the current sim
+static SIM current_sim;
+
+/****************************************************************/
+/****************************************************************/
+// Initialize the simulation
+/****************************************************************/
+/****************************************************************/
+
+#define N_BLOCK_COLORS 12
+static float block_colors[N_BLOCK_COLORS][3] = {
+  { 1.0, 0.5, 0.0 }, // brown
+  { 0.0, 1.0, 0.0 }, // green
+  { 1.0, 0.0, 0.5 }, // pink-purple
+  { 0.0, 1.0, 1.0 }, // cyan
+  { 1.0, 0.0, 0.0 }, // red
+  { 0.0, 1.0, 0.5 }, // another purple
+  { 0.5, 0.5, 1.0 }, // another purple
+  { 0.0, 0.5, 1.0 }, // blue
+  { 0.5, 0.0, 1.0 }, // dark purple
+  { 1.0, 0.0, 1.0 }, // light purple
+  { 1.0, 1.0, 1.0 }, // white
+  { 1.0, 1.0, 0.0 } }; // yellow
+
+#define N_BALL_COLORS 3
+static float ball_colors[N_BALL_COLORS][3] = {
+  { 1.0, 0.0, 0.0 }, // red
+  { 0.0, 1.0, 0.0 }, // green
+  { 0.0, 0.0, 1.0 } }; // blue
+
+/****************************************************************/
+
+static int read_sim_file( char *filename, SIM *s )
+{
+  int i, j;
+  FILE *stream;
+  char buffer[1000];
+  int n_ball_color = 0;
+  int n_block_color = 0;
+  float time = 0.0;
+  float time_increment = 0.1;
+
+  stream = fopen( filename, "r" );
+  if ( stream == NULL )
+    {
+      fprintf( stderr, "Can't open sim file %s\n", filename );
+      exit( -1 );
+    }
+
+  // defaults
+  s->window_width = 1400;  // pixels
+  s->window_height = 800;
+  s->xyz[0] = 0.5;
+  s->xyz[1] = -0.5;
+  s->xyz[2] = 0.5;
+  s->hpr[0] = 90.0;
+  s->hpr[1] = -25.0;
+  s->hpr[2] = 0.0;
+  s->duration = 2.0;  // seconds
+  s->time_step = 0.001; // seconds
+  // block sizes and masses
+  s->block_length = 0.1175;
+  s->block_width = 0.0232;
+  s->block_height = 0.0077;
+  s->block_mass = 0.1;
+  // ball sizes and masses
+  s->ball_radius = 0.0377/2.0;
+  s->ball_mass = 0.1;
+
+  // states
+  s->n_blocks = 0; // no blocks yet
+  s->time = 0.0; // what time is it?
+  s->last_time = 0.0; // handy variable
+  s->printed_everything = false;
+
+  for( ; ; )
+    {
+      // read keyword
+      if ( fscanf( stream, "%s", buffer ) < 1 )
+	break; // if we didn't read anything so we are done
+
+      // handle a window_height int
+      if ( strcmp( buffer, "window_height" ) == 0 )
+	{
+	  if ( fscanf( stream, "%d", &(s->window_height) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad window_height in sim file %s\n", filename );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+
+      // handle a window_width int
+      if ( strcmp( buffer, "window_width" ) == 0 )
+	{
+	  if ( fscanf( stream, "%d", &(s->window_width) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad window_width in sim file %s\n", filename );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+
+      // handle a time_step float
+      if ( strcmp( buffer, "time_step" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g", &(s->time_step) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad time_step in sim file %s\n", filename );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+      
+      // handle a viewpoint xyz x y z
+      if ( strcmp( buffer, "xyz" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->xyz[0]),
+		       &(s->xyz[1]),
+		       &(s->xyz[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad xyz in sim file %s\n", filename );
+	      exit( -1 );
+	    }
+	  printf( "xyz: %g %g %g\n",
+		  s->xyz[0],
+		  s->xyz[1],
+		  s->xyz[2] );
+	  continue;
+	}
+
+      // handle a viewpoint hpr h p r (heading/yaw pitch roll)
+      if ( strcmp( buffer, "hpr" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->hpr[0]),
+		       &(s->hpr[1]),
+		       &(s->hpr[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad hpr in sim file %s\n", filename );
+	      exit( -1 );
+	    }
+	  printf( "hpr: %g %g %g\n",
+		  s->hpr[0],
+		  s->hpr[1],
+		  s->hpr[2] );
+	  continue;
+	}
+
+      // handle a duration float
+      if ( strcmp( buffer, "duration" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g", &(s->duration) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad duration in sim file %s\n", filename );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+      
+      // handle a ball x y z
+      if ( strcmp( buffer, "ball" ) == 0 )
+	{
+	  i = s->n_balls;
+	  s->balls_init[i].created = false;
+	  s->balls_init[i].time = time;
+	  time += time_increment;
+	  for ( j = 0; j < 3; j++ )
+	    s->balls_init[i].rgb[j] = ball_colors[ n_ball_color ][ j ];
+	  if ( ++n_ball_color >= N_BALL_COLORS )
+	    n_ball_color = 0;
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->balls_init[i].xyz[0]),
+		       &(s->balls_init[i].xyz[1]),
+		       &(s->balls_init[i].xyz[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad ball %d xyz in sim file %s\n", i,
+		       filename );
+	      exit( -1 );
+	    }
+	  printf( "ball %d %g location: %g %g %g\n", i,
+		  s->balls_init[i].time,
+		  s->balls_init[i].xyz[0],
+		  s->balls_init[i].xyz[1],
+		  s->balls_init[i].xyz[2] );
+	  s->n_balls++;
+	  continue;
+	}
+
+      // handle a block x y z qs qx qy qz
+      if ( strcmp( buffer, "block" ) == 0 )
+	{
+	  i = s->n_blocks;
+	  s->blocks_init[i].created = false;
+	  s->blocks_init[i].time = time;
+	  time += time_increment;
+	  for ( j = 0; j < 3; j++ )
+	    s->blocks_init[i].rgb[j] = block_colors[ n_block_color ][ j ];
+	  if ( ++n_block_color >= N_BLOCK_COLORS )
+	    n_block_color = 0;
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->blocks_init[i].xyz[0]),
+		       &(s->blocks_init[i].xyz[1]),
+		       &(s->blocks_init[i].xyz[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad block %d xyz in sim file %s\n", i,
+		       filename );
+	      exit( -1 );
+	    }
+	  printf( "block %d %g location: %g %g %g\n", i,
+		  s->blocks_init[i].time,
+		  s->blocks_init[i].xyz[0],
+		  s->blocks_init[i].xyz[1],
+		  s->blocks_init[i].xyz[2] );
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->blocks_init[i].rpy[0]),
+		       &(s->blocks_init[i].rpy[1]),
+		       &(s->blocks_init[i].rpy[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad block %d quaternion in sim file %s\n", i,
+		       filename );
+	      exit( -1 );
+	    }
+	  printf( "block %d orientation (roll/pitch/yaw): %g %g %g\n", i,
+		  s->blocks_init[i].rpy[0],
+		  s->blocks_init[i].rpy[1],
+		  s->blocks_init[i].rpy[2] );
+	  s->n_blocks++;
+	  continue;
+	}
+      
+      fprintf( stderr, "bad keyword %s in sim file %s\n", buffer, filename );
+      exit( -1 );
+    }
+
+  fclose( stream );
+  return 1;
+}
+
+/****************************************************************/
+// print stuff at end
+
+void print_everything( SIM *s )
+{
+  int i;
+  const dReal *v_pos, *v_q;
+  float xyz[3], hpr[3];
+  
+  printf( "time: %g\n", s->time );
+
+  // blocks
+  for ( i = 0; i < s->n_blocks; i++ )
+    {
+      if ( !(s->blocks_init[i].created) )
+	continue;
+      v_pos = dBodyGetPosition( s->blocks_body[i] ); 
+      v_q = dBodyGetQuaternion( s->blocks_body[i] );
+      printf( "block %d: %g %g %g %g %g %g %g\n", i,
+	      v_pos[0], v_pos[1], v_pos[2],
+	      v_q[0], v_q[1], v_q[2], v_q[3] );
+    }
+
+  // balls
+  for ( i = 0; i < s->n_balls; i++ )
+    {
+      if ( !(s->balls_init[i].created) )
+	continue;
+      v_pos = dBodyGetPosition( s->balls_body[i] ); 
+      printf( "ball %d: %g %g %g\n", i, v_pos[0], v_pos[1], v_pos[2] );
+    }
+
+  // viewpoint
+  dsGetViewpoint( xyz, hpr );
+  printf( "xyz %g %g %g\n", xyz[0], xyz[1], xyz[2] );
+  printf( "hpr %g %g %g\n", hpr[0], hpr[1], hpr[2] );
+}
+
+/****************************************************************/
+/****************************************************************/
+// Callbacks: subroutines called by ODE that we define
+/****************************************************************/
+/****************************************************************/
+/****************************************************************/
+// Start
+
+// This function is called at the start of a simulation by ODE
+// see fn.start = &start; in initialize()
+// It sets up the viewpoint, and anything else you might want.
+void start_callback()
+{
+  dAllocateODEDataForThread(dAllocateMaskAll);
+  dsSetViewpoint( current_sim.xyz, current_sim.hpr );
+}
+
+/****************************************************************/
+// used to tweak the ball physics
+
+void ball_move_callback( dBodyID body )
+{
+}
+
+/****************************************************************/
+// used to tweak the block physics
+
+void block_move_callback( dBodyID body )
+{
+}
+
+/****************************************************************/
+// Used to figure out what kind of contact is going on.
+
+void identify_geom( SIM *s, dGeomID g, int *type, const char **str )
+{
+  int i;
+
+  if ( g == s->ground )
+    {
+      *type = GROUND;
+      *str = "ground";
+      return;
+    }
+  for ( i = 0; i < s->n_balls; i++ )
+    if ( g == s->balls_geom[i] )
+      {
+	*type = BALL;
+	*str = "ball";
+	return;
+      }
+  for ( i = 0; i < s->n_blocks; i++ )
+    if ( g == s->blocks_geom[i] )
+      {
+	*type = BLOCK;
+	*str = "block";
+	return;
+      }
+  *type = UNKNOWN;
+  *str = "unknown";
+}
+
+/****************************************************************/
+
+int ball_collision( dContact *c, int g_type, const char *g_string )
+{
+  c->surface.mode = dContactSoftCFM | dContactBounce;
+  c->surface.mu = 0.5;
+  c->surface.soft_cfm = 1e-4;
+  c->surface.bounce = 0.9;
+  c->surface.bounce_vel = 0.01;
+  return true;
+}
+
+/****************************************************************/
+
+int block_collision( dContact *c, int g_type, const char *g_string )
+{
+
+  if ( ( g_type == BLOCK ) || ( g_type == GROUND ) )
+    {
+      c->surface.mode = dContactSoftERP | dContactSoftCFM |
+	dContactApprox1;
+	// dContactApprox1 | dContactSlip1 | dContactSlip2;
+      c->surface.mu = 0.5;
+      c->surface.soft_erp = 0.1;
+      c->surface.soft_cfm = 1e-2;
+      c->surface.slip1 = 0.0;
+      c->surface.slip2 = 0.0;
+      return true;
+    }
+
+  // anything else
+  c->surface.mode = dContactSoftERP | dContactSoftCFM |
+    dContactApprox1;
+  // dContactApprox1 | dContactSlip1 | dContactSlip2;
+  c->surface.mu = 0.5;
+  c->surface.soft_erp = 0.1;
+  c->surface.soft_cfm = 1e-2;
+  c->surface.slip1 = 0.0;
+  c->surface.slip2 = 0.0;
+  return true;
+
+  // return false; // don't know what we hit
+}
+
+/****************************************************************/
+/*
+When the collision system detects that two objects are potentially colliding,
+it calls this routine which determines the points of contact and creates
+temporary joints. The surface parameters of the contact (friction,
+bounce velocity, CFM, etc) are also set here.
+*/
+
+#define MAX_N_CONTACTS 100
+
+void nearCallback( void *data, dGeomID g1, dGeomID g2 )
+{
+  int i;
+  dContact c_template[1]; // contact template
+  // todo: make max_n_contacts an argument to xxx_collision
+  int max_n_contacts = 4; // 10, 32, can vary by type of contact
+  int n_contacts = 0; // actual number of contacts created
+  int g1_type, g2_type;
+  const char *g1_string, *g2_string;
+
+  // Need to identify geoms:
+  identify_geom( &current_sim, g1, &g1_type, &g1_string );
+  identify_geom( &current_sim, g2, &g2_type, &g2_string );
+
+  // printf( "checking contact: %s %s\n", g1_string, g2_string );
+
+  // give up if unknown object involved
+  if ( g1_type == UNKNOWN )
+    return;
+  if ( g2_type == UNKNOWN )
+    return;
+  if ( g1_type == BALL )
+    {
+      if ( !ball_collision( c_template, g2_type, g2_string ) )
+	return;
+    }
+  else if ( g2_type == BALL )
+    {
+      if ( !ball_collision( c_template, g1_type, g1_string ) )
+	return;
+    }
+  else if ( g1_type == BLOCK )
+    {
+      if ( !block_collision( c_template, g2_type, g2_string ) )
+	return;
+    }
+  else if ( g2_type == BLOCK )
+    {
+      if ( !block_collision( c_template, g1_type, g1_string ) )
+	return;
+    }
+  else
+    return; // no ball or block involved, ignore.
+
+  // printf( "adding contact: %s %s\n", g1_string, g2_string );
+
+  dContact contacts[MAX_N_CONTACTS];
+
+  n_contacts = dCollide( g1, g2, max_n_contacts, &(contacts[0].geom),
+			 sizeof(dContact) );
+  
+  for ( i = 0; i < n_contacts; i ++ )
+    {
+      // want to do a copy here, not sure if neccessary
+      contacts[i].surface.mode = c_template->surface.mode;
+      contacts[i].surface.mu = c_template->surface.mu;
+      contacts[i].surface.mu2 = c_template->surface.mu2;
+      contacts[i].surface.soft_erp = c_template->surface.soft_erp;
+      contacts[i].surface.soft_cfm = c_template->surface.soft_cfm;
+      contacts[i].surface.slip1 = c_template->surface.slip1;
+      contacts[i].surface.slip2 = c_template->surface.slip2;
+      contacts[i].surface.bounce = c_template->surface.bounce;
+      contacts[i].surface.bounce_vel = c_template->surface.bounce_vel;
+      dJointID c = dJointCreateContact( world, contact_joint_group,
+					contacts + i );
+      dJointAttach( c, dGeomGetBody(g1), dGeomGetBody(g2) );
+    }
+}
+
+/****************************************************************/
+/****************************************************************/
+// called when a key pressed
+// see fn.command = &command; in initialize() 
+
+void command( int cmd )
+{
+  switch ( cmd )
+    {
+    case ' ':
+      printf( "You typed a space\n" );
+      break;
+    default:
+      printf( "You typed \'%c\' %d 0x%x\n", cmd, cmd, cmd );
+    }
+}
+
+/****************************************************************/
+/****************************************************************/
+/****************************************************************/
+/****************************************************************/
+/****************************************************************/
+/****************************************************************/
+/*************************************************************************/
+// compose two quaternions
+// q1*q2 = ( s1*s2 - v1'v2, s1*v2 + s2*v1 + v1xv2 )  
+
+void q1q2_q( float *q1, float *q2, float *q )
+{
+  q[0] = q1[0]*q2[0] - q1[1]*q2[1] - q1[2]*q2[2] - q1[3]*q2[3];
+  q[1] = q1[0]*q2[1] + q1[1]*q2[0] + q1[2]*q2[3] - q1[3]*q2[2];
+  q[2] = q1[0]*q2[2] - q1[1]*q2[3] + q1[2]*q2[0] + q1[3]*q2[1];
+  q[3] = q1[0]*q2[3] + q1[1]*q2[2] - q1[2]*q2[1] + q1[3]*q2[0];
+}
+
+/****************************************************************/
+
+void rpy_q( float *rpy, dQuaternion q )
+{
+  int i;
+  float qr[4], qp[4], qy[4], q1[4], q2[4];
+
+  qr[0] = cos( rpy[0]/2 ); 
+  qr[1] = sin( rpy[0]/2 ); 
+  qr[2] = 0.0;
+  qr[3] = 0.0;
+
+  qp[0] = cos( rpy[1]/2 ); 
+  qp[1] = 0.0;
+  qp[2] = sin( rpy[1]/2 ); 
+  qp[3] = 0.0;
+
+  qy[0] = cos( rpy[2]/2 ); 
+  qy[1] = 0.0;
+  qy[2] = 0.0;
+  qy[3] = sin( rpy[2]/2 ); 
+  
+  q1q2_q( qp, qr, q1 );
+  q1q2_q( qy, q1, q2 );
+
+  for ( i = 0; i < 4; i++ )
+    q[i] = q2[i];
+}
+
+/****************************************************************/
+// todo: make mass and geometry slightly vary
+
+void create_bodies_and_geoms( SIM *s )
+{
+  int i;
+  dMass m;
+  dQuaternion q;
+
+  // create balls
+  dMassSetSphereTotal( &m, s->ball_mass, s->ball_radius );
+  for ( i = 0; i < s->n_balls; i++ )
+    {
+      if ( s->balls_init[i].created )
+	continue;
+      if ( s->balls_init[i].time > s->time )
+	continue;
+      s->balls_geom[i] =
+	dCreateSphere( space, s->ball_radius );	
+      s->balls_body[i] = dBodyCreate( world );
+      // done by world defaults
+      // dBodySetAutoDisableFlag( s->balls_body[i], true );
+      dBodySetMass( s->balls_body[i], &m );
+      dGeomSetBody( s->balls_geom[i], s->balls_body[i] );
+      dBodySetPosition( s->balls_body[i], 
+			s->balls_init[i].xyz[0],
+			s->balls_init[i].xyz[1],
+			s->balls_init[i].xyz[2] );
+      // dBodySetLinearDamping( s->balls_body[i], 1e-4 ); 
+      // dBodySetLinearDampingThreshold( s->balls_body[i], 1e-7 );
+      dBodySetMovedCallback( s->balls_body[i], ball_move_callback );
+      printf( "ball %d %g location: %g %g %g\n", i,
+	      s->balls_init[i].time,
+	      s->balls_init[i].xyz[0],
+	      s->balls_init[i].xyz[1],
+	      s->balls_init[i].xyz[2] );
+      s->balls_init[i].created = true;
+    }
+
+  // create blocks
+  dMassSetBoxTotal( &m, s->block_mass,
+		    s->block_length, s->block_width, s->block_height );
+  for ( i = 0; i < s->n_blocks; i++ )
+    {
+      if ( s->blocks_init[i].created )
+	continue;
+      if ( s->blocks_init[i].time > s->time )
+	continue;
+      s->blocks_geom[i] =
+	dCreateBox( space, s->block_length, s->block_width, s->block_height );
+      s->blocks_body[i] = dBodyCreate( world );
+      // done by world defaults
+      // dBodySetAutoDisableFlag( s->blocks_body[i], true );
+      dBodySetMass( s->blocks_body[i], &m );
+      dGeomSetBody( s->blocks_geom[i], s->blocks_body[i] );
+      dBodySetPosition( s->blocks_body[i], 
+			s->blocks_init[i].xyz[0],
+			s->blocks_init[i].xyz[1],
+			s->blocks_init[i].xyz[2] );
+      rpy_q( s->blocks_init[i].rpy, q );
+      dBodySetQuaternion (s->blocks_body[i], q );
+      // dBodySetLinearDamping( s->blocks_body[i], 1e-4 ); 
+      // dBodySetLinearDampingThreshold( s->blocks_body[i], 1e-7 );
+      dBodySetMovedCallback( s->blocks_body[i], block_move_callback );
+      printf( "block %d %g location: %g %g %g\n", i,
+	      s->blocks_init[i].time,
+	      s->blocks_init[i].xyz[0],
+	      s->blocks_init[i].xyz[1],
+	      s->blocks_init[i].xyz[2] );
+      s->blocks_init[i].created = true;
+    }
+}
+
+/****************************************************************/
+/****************************************************************/
+// Draw the objects
+
+void draw_stuff( SIM *s )
+{
+  int i;
+  const dReal *pos;
+  const dReal *R;
+  dReal sides[3];
+
+  // draw balls
+  // dsSetTexture (DS_NONE);
+  dsSetTexture (DS_CHECKERED);
+  for ( i = 0; i < s->n_balls; i++ )
+    {
+      dsSetColor( s->balls_init[i].rgb[0],
+		  s->balls_init[i].rgb[1],
+		  s->balls_init[i].rgb[2] );
+      if ( !(s->balls_init[i].created) )
+	continue;
+      pos = dGeomGetPosition( s->balls_geom[i] );
+      R = dGeomGetRotation( s->balls_geom[i] );
+      dsDrawSphere( pos, R, dGeomSphereGetRadius( s->balls_geom[i] ) );
+    }
+
+  // draw blocks
+  // dsSetTexture( DS_WOOD );
+  dsSetTexture( DS_NONE );  
+  for ( i = 0; i < s->n_blocks; i++ )
+    {
+      if ( !(s->blocks_init[i].created) )
+	continue;
+      dsSetColor( s->blocks_init[i].rgb[0],
+		  s->blocks_init[i].rgb[1],
+		  s->blocks_init[i].rgb[2] );
+      /*
+      if ( !dBodyIsEnabled( dGeomGetBody( s->blocks_geom[i] ) ) )
+	dsSetColor( 1.0, 1.0, 1.0 ); // white
+      */
+      pos = dGeomGetPosition( s->blocks_geom[i] );
+      R = dGeomGetRotation( s->blocks_geom[i] );
+      dGeomBoxGetLengths( s->blocks_geom[i], sides );
+      dsDrawBox( pos, R, sides );
+    }
+}
+
+/****************************************************************/
+/****************************************************************/
+/*
+  This is the main simulation loop that calls the collision detection
+  function, steps the simulation, resets the temporary contact joint
+  group, and redraws the objects at their new position.
+  see fn.step = &simLoop; in initialize() 
+*/
+
+// simulation loop
+void simLoop( int pause )
+{
+  SIM *s;
+
+  s = &current_sim;
+  
+  create_bodies_and_geoms( s );
+
+  // find collisions and add contact joints
+  dSpaceCollide( space, 0, &nearCallback );
+
+  // step the simulation
+  if ( doFast )
+    dWorldQuickStep( world, s->time_step );  
+  else
+    dWorldStep( world, s->time_step );  
+
+  // increment time
+  s->time += s->time_step;
+  // printf( "%g %g\n", s->time, s->last_time );
+
+  // remove all contact joints
+  dJointGroupEmpty( contact_joint_group );
+
+  draw_stuff( s );
+
+  if ( s->time >= s->last_time + 1.0 )
+    {
+      printf( "time: %g\n", s->time );
+      s->last_time += 1.0;
+    }
+
+  if ( (s->time >= s->duration) && (s->printed_everything == false) )
+    {
+      print_everything( s );
+      s->printed_everything = true;
+    }
+}
+
+/****************************************************************/
+// Initialize data structures
+
+void set_up_sim( SIM *s )
+{
+  dReal erp, cfm;
+
+  // setup pointers to drawstuff callback functions
+  fn.version = DS_VERSION;
+  fn.start = &start_callback;
+  fn.step = &simLoop;
+  fn.stop = 0;
+  fn.command = &command;
+  fn.path_to_textures = DRAWSTUFF_TEXTURE_PATH;
+ 
+  // dInitODE();
+  dInitODE2(0);
+  
+  // create world
+  world = dWorldCreate( );
+  // space = dSimpleSpaceCreate( 0 );
+  // space = dHashSpaceCreate( 0 );
+  //         dHashSpaceSetLevels( space, -3, 5 );
+  // space = dQuadTreeSpaceCreate( 0, center, extents, 5 ); // 7
+  space = dSweepAndPruneSpaceCreate( 0, dSAP_AXES_XYZ );
+  dWorldSetGravity( world, 0.0, 0.0, -9.81 );
+  dWorldSetCFM( world, 1e-5 );
+  dWorldSetERP (world, 0.8 );
+  erp = dWorldGetERP( world );
+  cfm = dWorldGetCFM( world );
+  printf( "erp: %g, cfm: %g, kp: %g, kd: %g\n",
+	  erp, cfm, erp/(cfm*s->time_step), (1 - erp)/cfm );
+  dWorldSetQuickStepNumIterations( world, 20 );
+  dWorldSetAutoDisableFlag( world, true );
+  dWorldSetAutoDisableSteps( world, 10 );
+  dWorldSetAutoDisableTime( world, 0.15f );
+  dWorldSetAutoDisableLinearThreshold( world, 1e-3 );
+  dWorldSetAutoDisableAngularThreshold( world, 1e-2 );
+  // dWorldSetAutoDisableAverageSamplesCount( world, 10 );
+          // used for averaging
+  // dWorldSetAutoDisableLinearAverageThreshold( world, 0.001 );
+  // dWorldSetAutoDisableAngularAverageThreshold( world, 0.03 );
+  dWorldSetLinearDamping( world, 1e-4 );
+  dWorldSetLinearDampingThreshold( world, 1e-7 );
+  dWorldSetAngularDamping( world, 1e-3 );
+  dWorldSetAngularDampingThreshold( world, 1e-6 );
+  // dWorldSetMaxAngularSpeed(world, 200);
+  // dWorldSetContactMaxCorrectingVel(world,0.1); //40 in demo_convex.cpp
+  // dWorldSetContactSurfaceLayer(world,0.001);
+  // dWorldSetQuickStepW(world, 0.75); // For increased stability.
+  
+  threading = dThreadingAllocateMultiThreadedImplementation();
+  pool = dThreadingAllocateThreadPool( 8, 0, dAllocateFlagBasicData, NULL );
+  dThreadingThreadPoolServeMultiThreadedImplementation( pool, threading );
+  // dWorldSetStepIslandsProcessingMaxThreadCount( world, 1 );
+  dWorldSetStepThreadingImplementation( world,
+	dThreadingImplementationGetFunctions( threading ), threading );
+  
+  contact_joint_group = dJointGroupCreate( 0 );
+
+  s->ground = dCreatePlane( space, 0, 0, 1, 0 );
+
+  create_bodies_and_geoms( s );
+}
+
+/****************************************************************/
+/****************************************************************/
+
+int main( int argc, const char **argv )
+{
+  char *filename;
+
+  if ( argc < 2 )
+    filename = (char *) "b1.txt";
+  else
+    filename = (char *) (argv[1]);
+  printf( "Using sim file %s\n", filename );
+  read_sim_file( filename, &current_sim );
+
+  set_up_sim( &current_sim );
+
+  // run simulation
+  dsSimulationLoop( argc, (char **) argv,
+		    current_sim.window_width, current_sim.window_height,
+		    &fn );
+  // above routine currently does not return.
+
+  return 0;
+}
+
+/****************************************************************/

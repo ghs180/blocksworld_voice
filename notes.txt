@@ -1,0 +1,41 @@
+To run the linux 64 bit executable
+./blocks-x64
+or
+./blocks-x64 b1.txt
+or
+./blocks-x64 balls.txt
+
+To run the windows executable (also 64bit)
+./blocks-w64
+or
+./blocks-w64 b1.txt
+or
+./blocks-w64 balls.txt
+
+To run the mac executable
+./blocks-mac
+or
+./blocks-mac b1.txt
+or
+./blocks-mac balls.txt
+
+Other files:
+b1.txt: "sim" or "scene" file that sets up for the balls example
+balls.txt: "sim" or "scene" file that creates 3 towers.
+blocks.cpp: the C++ code
+blocks.h: useful definitions
+Makefile: instructions on how to compile this on linux
+Makefile-mac: instructions on how to compile this on a Mac
+my-ode.h: useful definitions generic for ODE
+texturepath.h: points to textures
+textures: the ODE textures (for convenience)
+
+windows needs these to run:
+drawstuff.dll
+ode_singled.dll
+
+VS2017 project files:
+blocks.sln
+blocks.vcxproj
+blocks.vcxproj.filters
+blocks.vcxproj.user
