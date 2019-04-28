@@ -8,6 +8,13 @@ Blocks world simulator
 #include <drawstuff/drawstuff.h>
 #include "my-ode.h"
 #include "blocks.h"
+#include <thread>
+#include <chrono>
+#include <iostream>
+#include <sstream>
+
+
+
 
 /****************************************************************/
 // Globals
@@ -23,7 +30,9 @@ static bool doFast = true;
 
 // the current sim
 static SIM current_sim;
-
+std::string filename;
+static int file_counter;
+float time_val;
 /****************************************************************/
 /****************************************************************/
 // Initialize the simulation
@@ -53,20 +62,29 @@ static float ball_colors[N_BALL_COLORS][3] = {
 
 /****************************************************************/
 
-static int read_sim_file( char *filename, SIM *s )
+inline bool exists_test1 (const std::string& name) {
+    if (FILE *file = fopen(name.c_str(), "r")) {
+        fclose(file);
+        return true;
+    } else {
+        return false;
+    }   
+}
+
+static int read_sim_file_init( std::string filename, SIM *s )
 {
   int i, j;
   FILE *stream;
   char buffer[1000];
   int n_ball_color = 0;
   int n_block_color = 0;
-  float time = 0.0;
+  time_val = 0.0;
   float time_increment = 0.1;
 
-  stream = fopen( filename, "r" );
+  stream = fopen( filename.c_str(), "r" );
   if ( stream == NULL )
     {
-      fprintf( stderr, "Can't open sim file %s\n", filename );
+      fprintf( stderr, "Can't open sim file %s\n", filename.c_str() );
       exit( -1 );
     }
 
@@ -107,7 +125,7 @@ static int read_sim_file( char *filename, SIM *s )
 	{
 	  if ( fscanf( stream, "%d", &(s->window_height) ) < 1 )
 	    {
-	      fprintf( stderr, "Bad window_height in sim file %s\n", filename );
+	      fprintf( stderr, "Bad window_height in sim file %s\n", filename.c_str() );
 	      exit( -1 );
 	    }
 	  continue;
@@ -118,7 +136,7 @@ static int read_sim_file( char *filename, SIM *s )
 	{
 	  if ( fscanf( stream, "%d", &(s->window_width) ) < 1 )
 	    {
-	      fprintf( stderr, "Bad window_width in sim file %s\n", filename );
+	      fprintf( stderr, "Bad window_width in sim file %s\n", filename.c_str() );
 	      exit( -1 );
 	    }
 	  continue;
@@ -129,7 +147,7 @@ static int read_sim_file( char *filename, SIM *s )
 	{
 	  if ( fscanf( stream, "%g", &(s->time_step) ) < 1 )
 	    {
-	      fprintf( stderr, "Bad time_step in sim file %s\n", filename );
+	      fprintf( stderr, "Bad time_step in sim file %s\n", filename.c_str() );
 	      exit( -1 );
 	    }
 	  continue;
@@ -143,7 +161,7 @@ static int read_sim_file( char *filename, SIM *s )
 		       &(s->xyz[1]),
 		       &(s->xyz[2]) ) < 3 )
 	    {
-	      fprintf( stderr, "bad xyz in sim file %s\n", filename );
+	      fprintf( stderr, "bad xyz in sim file %s\n", filename.c_str() );
 	      exit( -1 );
 	    }
 	  printf( "xyz: %g %g %g\n",
@@ -161,7 +179,7 @@ static int read_sim_file( char *filename, SIM *s )
 		       &(s->hpr[1]),
 		       &(s->hpr[2]) ) < 3 )
 	    {
-	      fprintf( stderr, "bad hpr in sim file %s\n", filename );
+	      fprintf( stderr, "bad hpr in sim file %s\n", filename.c_str() );
 	      exit( -1 );
 	    }
 	  printf( "hpr: %g %g %g\n",
@@ -176,7 +194,7 @@ static int read_sim_file( char *filename, SIM *s )
 	{
 	  if ( fscanf( stream, "%g", &(s->duration) ) < 1 )
 	    {
-	      fprintf( stderr, "Bad duration in sim file %s\n", filename );
+	      fprintf( stderr, "Bad duration in sim file %s\n", filename.c_str() );
 	      exit( -1 );
 	    }
 	  continue;
@@ -187,8 +205,8 @@ static int read_sim_file( char *filename, SIM *s )
 	{
 	  i = s->n_balls;
 	  s->balls_init[i].created = false;
-	  s->balls_init[i].time = time;
-	  time += time_increment;
+	  s->balls_init[i].time = time_val;
+	  time_val += time_increment;
 	  for ( j = 0; j < 3; j++ )
 	    s->balls_init[i].rgb[j] = ball_colors[ n_ball_color ][ j ];
 	  if ( ++n_ball_color >= N_BALL_COLORS )
@@ -199,7 +217,7 @@ static int read_sim_file( char *filename, SIM *s )
 		       &(s->balls_init[i].xyz[2]) ) < 3 )
 	    {
 	      fprintf( stderr, "bad ball %d xyz in sim file %s\n", i,
-		       filename );
+		       filename.c_str() );
 	      exit( -1 );
 	    }
 	  printf( "ball %d %g location: %g %g %g\n", i,
@@ -216,8 +234,8 @@ static int read_sim_file( char *filename, SIM *s )
 	{
 	  i = s->n_blocks;
 	  s->blocks_init[i].created = false;
-	  s->blocks_init[i].time = time;
-	  time += time_increment;
+	  s->blocks_init[i].time = time_val;
+	  time_val += time_increment;
 	  for ( j = 0; j < 3; j++ )
 	    s->blocks_init[i].rgb[j] = block_colors[ n_block_color ][ j ];
 	  if ( ++n_block_color >= N_BLOCK_COLORS )
@@ -228,7 +246,7 @@ static int read_sim_file( char *filename, SIM *s )
 		       &(s->blocks_init[i].xyz[2]) ) < 3 )
 	    {
 	      fprintf( stderr, "bad block %d xyz in sim file %s\n", i,
-		       filename );
+		       filename.c_str() );
 	      exit( -1 );
 	    }
 	  printf( "block %d %g location: %g %g %g\n", i,
@@ -242,7 +260,7 @@ static int read_sim_file( char *filename, SIM *s )
 		       &(s->blocks_init[i].rpy[2]) ) < 3 )
 	    {
 	      fprintf( stderr, "bad block %d quaternion in sim file %s\n", i,
-		       filename );
+		       filename.c_str());
 	      exit( -1 );
 	    }
 	  printf( "block %d orientation (roll/pitch/yaw): %g %g %g\n", i,
@@ -253,7 +271,189 @@ static int read_sim_file( char *filename, SIM *s )
 	  continue;
 	}
       
-      fprintf( stderr, "bad keyword %s in sim file %s\n", buffer, filename );
+      fprintf( stderr, "bad keyword %s in sim file %s\n", buffer, filename.c_str() );
+      exit( -1 );
+    }
+
+  fclose( stream );
+  return 1;
+}
+
+static int read_sim_file( std::string filename, SIM *s )
+{
+  int i, j;
+  FILE *stream;
+  char buffer[1000];
+  int n_ball_color = 0;
+  int n_block_color = 0;
+  //time_val = 0.0;
+  float time_increment = 0.1;
+
+  stream = fopen( filename.c_str(), "r" );
+  if ( stream == NULL )
+    {
+      fprintf( stderr, "Can't open sim file %s\n", filename.c_str() );
+      exit( -1 );
+    }
+
+  for( ; ; )
+    {
+      // read keyword
+      if ( fscanf( stream, "%s", buffer ) < 1 )
+	break; // if we didn't read anything so we are done
+
+      // handle a window_height int
+      if ( strcmp( buffer, "window_height" ) == 0 )
+	{
+	  if ( fscanf( stream, "%d", &(s->window_height) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad window_height in sim file %s\n", filename.c_str() );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+
+      // handle a window_width int
+      if ( strcmp( buffer, "window_width" ) == 0 )
+	{
+	  if ( fscanf( stream, "%d", &(s->window_width) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad window_width in sim file %s\n", filename.c_str() );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+
+      // handle a time_step float
+      if ( strcmp( buffer, "time_step" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g", &(s->time_step) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad time_step in sim file %s\n", filename.c_str() );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+      
+      // handle a viewpoint xyz x y z
+      if ( strcmp( buffer, "xyz" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->xyz[0]),
+		       &(s->xyz[1]),
+		       &(s->xyz[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad xyz in sim file %s\n", filename.c_str() );
+	      exit( -1 );
+	    }
+	  printf( "xyz: %g %g %g\n",
+		  s->xyz[0],
+		  s->xyz[1],
+		  s->xyz[2] );
+	  continue;
+	}
+
+      // handle a viewpoint hpr h p r (heading/yaw pitch roll)
+      if ( strcmp( buffer, "hpr" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->hpr[0]),
+		       &(s->hpr[1]),
+		       &(s->hpr[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad hpr in sim file %s\n", filename.c_str() );
+	      exit( -1 );
+	    }
+	  printf( "hpr: %g %g %g\n",
+		  s->hpr[0],
+		  s->hpr[1],
+		  s->hpr[2] );
+	  continue;
+	}
+
+      // handle a duration float
+      if ( strcmp( buffer, "duration" ) == 0 )
+	{
+	  if ( fscanf( stream, "%g", &(s->duration) ) < 1 )
+	    {
+	      fprintf( stderr, "Bad duration in sim file %s\n", filename.c_str() );
+	      exit( -1 );
+	    }
+	  continue;
+	}
+      
+      // handle a ball x y z
+  if ( strcmp( buffer, "ball" ) == 0 )
+	{
+	  i = s->n_balls;
+	  s->balls_init[i].created = false;
+	  s->balls_init[i].time = time_val;
+	  time_val += time_increment;
+	  for ( j = 0; j < 3; j++ )
+	    s->balls_init[i].rgb[j] = ball_colors[ n_ball_color ][ j ];
+	  if ( ++n_ball_color >= N_BALL_COLORS )
+	    n_ball_color = 0;
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->balls_init[i].xyz[0]),
+		       &(s->balls_init[i].xyz[1]),
+		       &(s->balls_init[i].xyz[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad ball %d xyz in sim file %s\n", i,
+		       filename.c_str() );
+	      exit( -1 );
+	    }
+	  printf( "ball %d %g location: %g %g %g\n", i,
+		  s->balls_init[i].time,
+		  s->balls_init[i].xyz[0],
+		  s->balls_init[i].xyz[1],
+		  s->balls_init[i].xyz[2] );
+	  s->n_balls++;
+	  continue;
+	}
+
+      // handle a block x y z qs qx qy qz
+      if ( strcmp( buffer, "block" ) == 0 )
+	{
+	  i = s->n_blocks;
+	  s->blocks_init[i].created = false;
+	  s->blocks_init[i].time = time_val;
+	  time_val += time_increment;
+	  for ( j = 0; j < 3; j++ )
+	    s->blocks_init[i].rgb[j] = block_colors[ n_block_color ][ j ];
+	  if ( ++n_block_color >= N_BLOCK_COLORS )
+	    n_block_color = 0;
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->blocks_init[i].xyz[0]),
+		       &(s->blocks_init[i].xyz[1]),
+		       &(s->blocks_init[i].xyz[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad block %d xyz in sim file %s\n", i,
+		       filename.c_str() );
+	      exit( -1 );
+	    }
+	  printf( "block %d %g location: %g %g %g\n", i,
+		  s->blocks_init[i].time,
+		  s->blocks_init[i].xyz[0],
+		  s->blocks_init[i].xyz[1],
+		  s->blocks_init[i].xyz[2] );
+	  if ( fscanf( stream, "%g%g%g",
+		       &(s->blocks_init[i].rpy[0]),
+		       &(s->blocks_init[i].rpy[1]),
+		       &(s->blocks_init[i].rpy[2]) ) < 3 )
+	    {
+	      fprintf( stderr, "bad block %d quaternion in sim file %s\n", i,
+		       filename.c_str() );
+	      exit( -1 );
+	    }
+	  printf( "block %d orientation (roll/pitch/yaw): %g %g %g\n", i,
+		  s->blocks_init[i].rpy[0],
+		  s->blocks_init[i].rpy[1],
+		  s->blocks_init[i].rpy[2] );
+	  s->n_blocks++;
+	  continue;
+	}
+      
+      fprintf( stderr, "bad keyword %s in sim file %s\n", buffer, filename.c_str() );
       exit( -1 );
     }
 
@@ -496,6 +696,9 @@ void command( int cmd )
     case ' ':
       printf( "You typed a space\n" );
       break;
+    case 't':
+      printf( "You typed t\n");
+      break;
     default:
       printf( "You typed \'%c\' %d 0x%x\n", cmd, cmd, cmd );
     }
@@ -653,13 +856,13 @@ void draw_stuff( SIM *s )
   for ( i = 0; i < s->n_blocks; i++ )
     {
       if ( !(s->blocks_init[i].created) )
-	continue;
+	    continue;
       dsSetColor( s->blocks_init[i].rgb[0],
 		  s->blocks_init[i].rgb[1],
 		  s->blocks_init[i].rgb[2] );
       /*
       if ( !dBodyIsEnabled( dGeomGetBody( s->blocks_geom[i] ) ) )
-	dsSetColor( 1.0, 1.0, 1.0 ); // white
+	    dsSetColor( 1.0, 1.0, 1.0 ); // white
       */
       pos = dGeomGetPosition( s->blocks_geom[i] );
       R = dGeomGetRotation( s->blocks_geom[i] );
@@ -681,9 +884,29 @@ void draw_stuff( SIM *s )
 void simLoop( int pause )
 {
   SIM *s;
+  
+  /*std::string line;
+  std::getline(std::cin, line);
+  std::cout << line << std::endl;*/
+  //read_sim_file( filename, &current_sim );
+  //printf(filename);
+  //printf("\n");
+
+  if (exists_test1(filename))
+  {
+    //Execute read filename, shoudln't ever have file_counter == 0 since sim increments before simulating in init
+    //Read file here, then increment
+    read_sim_file(filename, &current_sim);
+    file_counter += 1;
+    std::string var = "";
+    var += std::to_string(file_counter);
+    var += ".txt";
+    filename = var;
+    std::cout << filename << std::endl;
+  }
 
   s = &current_sim;
-  
+
   create_bodies_and_geoms( s );
 
   // find collisions and add contact joints
@@ -787,14 +1010,25 @@ void set_up_sim( SIM *s )
 
 int main( int argc, const char **argv )
 {
-  char *filename;
+  file_counter = 0;
 
-  if ( argc < 2 )
-    filename = (char *) "b1.txt";
+  if ( argc < 2 ){
+      std::ostringstream stream;
+      stream << file_counter << ".txt";
+      filename = stream.str();
+  }
   else
-    filename = (char *) (argv[1]);
-  printf( "Using sim file %s\n", filename );
-  read_sim_file( filename, &current_sim );
+    filename = std::string(argv[1]);
+  
+  printf( "Using sim file %s\n", filename.c_str() );
+  
+  read_sim_file_init( filename, &current_sim );
+
+  file_counter++;
+      std::ostringstream stream;
+      stream << file_counter << ".txt";
+      filename = (char *) stream.str().c_str();
+
 
   set_up_sim( &current_sim );
 
