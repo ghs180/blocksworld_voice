@@ -43,7 +43,7 @@ d = 0
 rotate = True
 
 
-for i in range(0, 100):
+for i in range(0, 300):
     try:
         os.remove("{}.txt".format(i))
     except:
@@ -127,21 +127,39 @@ def process(text, file1):
     if words[0] == "wait":
         return -3
     if words[0] == "build" or words[0] == "place":
-        if words[1] == "block":
-            if len(words) > 2 and words[2] == "to":
-                x = 2
-                y = 2 if words[3] == "to" else int(words[3])
-            elif len(words) > 2 and words[2] == "tutu":
-                x = 2
+        if len(words) == 3 and len(words[2]) == 3 and words[2][1] == "/":
+            x = int(words[2][0])
+            y = int(words[2][2])
+        elif len(words) > 3 and words[2] == "to":
+            x = 2
+            if len(words) > 3 and words[3] == "three":
+                y = 3
+            elif words[3] == "to":
                 y = 2
-            elif len(words) > 2:
-                x = int(words[2][0])
-                y= int(words[2][1])
+            else:
+                y = int(words[3])
+        elif len(words) > 3 and words[2] == "three":
+            x = 3
+            if len(words) > 3 and words[3] == "three":
+                y = 3
+            else:
+                y = int(words[3])
+        elif len(words) > 2 and words[2] == "tutu":
+            x = 2
+            y = 2
+        elif len(words) > 3 and words[2] == "for":
+            x = 4
+            y = int(words[3])
+        elif len(words) > 3 and words[3] == "for":
+            x = int(words[2])
+            y = 2
+        elif len(words) > 3:
+            x = int(words[2])
+            y= int(words[3])
+        if words[1] == "block":
             build_block(x, y, a, b, c, d)
             return 1
         elif words[1] == "structure":
-            x = int(words[2][0])
-            y= int(words[3][1])
             build_structure(x, y)
             return 1
     else:
@@ -228,10 +246,7 @@ class PS4Controller(object):
                             #print("down")
                         if event.value < 0:
                             #print("up")'''
-                if event.type == pygame.JOYBUTTONDOWN:
-                    if event.button == 1:
-                        print("wow pressed the X button")
-                elif event.type == pygame.JOYBUTTONUP:
+                if event.type == pygame.JOYBUTTONUP:
                     if event.button == 1:
                         build_block(x, y, a, b, c, d)
                         system('say Building block at {} {}'.format(x, y))

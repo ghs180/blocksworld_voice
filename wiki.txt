@@ -4,10 +4,14 @@ The instructions for the program are listed below.
 
 To enable voice control, press triangle.
 
-To place the block, press X button.
+To exit voice control, say exit, stop, or quit.
 
-To place the structure, press O button.
+To place a block, press X button.
 
-To rotate the block press L1 and R1.
+To place a structure, press O button.
+
+To rotate a block press L1 and R1.
 
 Use the arrow keys to move the block location.
+
+George Hatzis-Schoch is the author of this project.

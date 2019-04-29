@@ -151,9 +151,9 @@ for q in questions:
                 t_neg += 1
 
         if (q_neg % 2 == t_neg % 2):
-            print("Yes.")
+            system('say {}'.format("Yes."))
         else:
-            print("No.")
+            system('say {}'.format("No."))
     else:
         #wh questions
         if answer_ent_count == 1 and answer_word.lower() not in q.lower():
